@@ -22,6 +22,13 @@ public class GameView extends View {
     }
     private GameState gameState = GameState.START;
 
+    private static final float LEVEL_LENGTH_FACTOR = 10f;
+    private static final float MIN_SPEED_FACTOR = 0.003f;
+    private static final float MAX_SPEED_FACTOR = 0.012f;
+
+    private float distance, levelLength, speed, minSpeed, maxSpeed;
+    private boolean thrust;
+
     /* VAISSEAU */
     private float shipX, shipY, shipSize;
     private final Path shipPath = new Path();
@@ -39,7 +46,8 @@ public class GameView extends View {
     private final RectF btn2 = new RectF();
     private final RectF btn3 = new RectF();
     private final RectF btnPause = new RectF();   // bouton PAUSE en jeu
-    private final RectF btnEnd = new RectF();     // bouton de test pour finir la partie
+    private final RectF btnAdvance = new RectF();     // bouton de test pour finir la partie
+    private final RectF progressBar = new RectF();
 
     // ---------------- Peintures (créées une seule fois) ----------------
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -70,9 +78,9 @@ public class GameView extends View {
     public void stopGame() {
         removeCallbacks(gameLoop);
     }
-    
+
     public void onActivityPause() {
-        if (gameState == GameState.PLAYING) gameState = GameState.PAUSED;
+        if (gameState == GameState.PLAYING) pauseGame();
         stopGame();
         invalidate();
     }
@@ -100,7 +108,9 @@ public class GameView extends View {
         shipPath.close();
 
         // étoiles
-        starSpeed = h * 0.004f;
+        levelLength = h * LEVEL_LENGTH_FACTOR;
+        minSpeed = h * MIN_SPEED_FACTOR;
+        maxSpeed = h * MAX_SPEED_FACTOR;
         for (int i = 0; i < STAR_COUNT; i++) {
             starX[i] = rnd.nextFloat() * w;
             starY[i] = rnd.nextFloat() * h;
@@ -112,22 +122,41 @@ public class GameView extends View {
         btn2.set(w * 0.2f, h * 0.66f, w * 0.8f, h * 0.73f);
         btn3.set(w * 0.2f, h * 0.77f, w * 0.8f, h * 0.84f);
         btnPause.set(w * 0.74f, h * 0.03f, w * 0.96f, h * 0.085f);
-        btnEnd.set(w * 0.10f, h * 0.86f, w * 0.90f, h * 0.94f);
+        btnAdvance.set(w * 0.10f, h * 0.86f, w * 0.90f, h * 0.96f);
+        progressBar.set(w * 0.10f, h * 0.11f, w * 0.90f, h * 0.125f);
 
         textPaint.setTextSize(w * 0.05f);
+
+        resetGame();
     }
+
+    private void resetGame() { distance = 0; speed = minSpeed; thrust = false; }
+    private void startNewGame() { resetGame(); gameState = GameState.PLAYING; }
+    private void pauseGame() { thrust = false; gameState = GameState.PAUSED; }
 
     /* MISE À JOUR*/
     private void update() {
         // Les étoiles ne défilent que pendant la partie
         if (gameState != GameState.PLAYING) return;
 
+        // La vitesse tend vers le max si on maintient le bouton, vers le min sinon
+        float target = thrust ? maxSpeed : minSpeed;
+        speed += (target - speed) * 0.08f;
+        distance += speed;
+
         for (int i = 0; i < STAR_COUNT; i++) {
-            starY[i] += starSpeed * starDepth[i];
+            starY[i] += speed * starDepth[i];
             if (starY[i] > getHeight()) {       // sortie en bas -> réapparition en haut
                 starY[i] = 0;
                 starX[i] = rnd.nextFloat() * getWidth();
             }
+        }
+
+        // Arrivée au point B -> fin de partie
+        if (distance >= levelLength) {
+            distance = levelLength;
+            thrust = false;
+            gameState = GameState.GAME_OVER;
         }
     }
 
@@ -169,6 +198,10 @@ public class GameView extends View {
         canvas.translate(shipX, shipY);
         fillPaint.setColor(Color.rgb(0, 200, 220));
         canvas.drawPath(shipPath, fillPaint);
+        if (thrust) {   // flamme quand on accélère
+            fillPaint.setColor(Color.rgb(255, 150, 0));
+            canvas.drawCircle(0, shipSize * 1.1f, shipSize * 0.3f, fillPaint);
+        }
         canvas.restore();
     }
 
@@ -187,6 +220,28 @@ public class GameView extends View {
         textPaint.setTextSize(getWidth() * 0.05f);
     }
 
+    /* Barre de progression : A (départ) ---- B (arrivée) */
+    private void drawProgressBar(Canvas canvas) {
+        float progress = Math.min(1f, distance / levelLength);
+
+        // Fond de la barre
+        fillPaint.setColor(Color.argb(120, 255, 255, 255));
+        canvas.drawRoundRect(progressBar, 10, 10, fillPaint);
+
+        // Partie remplie (on modifie temporairement le côté droit du rectangle)
+        float fullRight = progressBar.right;
+        progressBar.right = progressBar.left + (fullRight - progressBar.left) * progress;
+        fillPaint.setColor(Color.rgb(0, 200, 220));
+        canvas.drawRoundRect(progressBar, 10, 10, fillPaint);
+        progressBar.right = fullRight;   // on remet la bonne valeur
+
+        // Repères A et B
+        textPaint.setColor(Color.WHITE);
+        float ty = progressBar.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f;
+        canvas.drawText("A", getWidth() * 0.05f, ty, textPaint);
+        canvas.drawText("B", getWidth() * 0.95f, ty, textPaint);
+    }
+
     /* Écran Accueil */
     private void drawStartScreen(Canvas canvas) {
         drawTitle(canvas, "SPACE ESCAPE", getHeight() * 0.28f);
@@ -198,8 +253,8 @@ public class GameView extends View {
     private void drawGame(Canvas canvas) {
         drawShip(canvas);
         drawButton(canvas, btnPause, "PAUSE", Color.argb(180, 80, 80, 100));
-        drawButton(canvas, btnEnd, "TERMINER (test)", Color.rgb(170, 50, 50));
-        // TODO plus tard : bouton Avancer, obstacles, barre de progression...
+        drawProgressBar(canvas);
+        drawButton(canvas, btnAdvance, "AVANCER (maintenir)", thrust ? Color.rgb(230, 120, 0) : Color.rgb(40, 90, 200));
     }
 
     /* Écran Pause */
@@ -223,30 +278,43 @@ public class GameView extends View {
     /* NAVIGATION ENTRE LES ÉCRANS */
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (event.getAction() != MotionEvent.ACTION_DOWN) return true;
-
-        float tx = event.getX();
-        float ty = event.getY();
+        int masked = event.getActionMasked();
+        int idx = event.getActionIndex();
+        boolean isDown = masked == MotionEvent.ACTION_DOWN || masked == MotionEvent.ACTION_POINTER_DOWN;
+        boolean isUp = masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_POINTER_UP;
+        float tx = event.getX(idx);
+        float ty = event.getY(idx);
 
         switch (gameState) {
             case START:
-                if (btn1.contains(tx, ty)) gameState = GameState.PLAYING;
+                if (isDown && btn1.contains(tx, ty)) startNewGame();
                 break;
 
             case PLAYING:
-                if (btnPause.contains(tx, ty)) gameState = GameState.PAUSED;
-                else if (btnEnd.contains(tx, ty)) gameState = GameState.GAME_OVER;
+                // thrust = true si AU MOINS UN doigt est sur le bouton AVANCER
+                thrust = false;
+                for (int i = 0; i < event.getPointerCount(); i++) {
+                    if (isUp && i == idx) continue;   // ce doigt vient d'être relevé
+                    if (btnAdvance.contains(event.getX(i), event.getY(i))) thrust = true;
+                }
+                if (masked == MotionEvent.ACTION_CANCEL) thrust = false;
+
+                if (isDown && btnPause.contains(tx, ty)) pauseGame();
                 break;
 
             case PAUSED:
-                if (btn1.contains(tx, ty)) gameState = GameState.PLAYING;        // reprendre
-                else if (btn2.contains(tx, ty)) gameState = GameState.PLAYING;   // recommencer (rien à réinitialiser pour l'instant)
-                else if (btn3.contains(tx, ty)) gameState = GameState.START;     // abandonner
+                if (isDown) {
+                    if (btn1.contains(tx, ty)) gameState = GameState.PLAYING;   // reprendre (sans réinitialiser)
+                    else if (btn2.contains(tx, ty)) startNewGame();             // recommencer
+                    else if (btn3.contains(tx, ty)) { resetGame(); gameState = GameState.START; }
+                }
                 break;
 
             case GAME_OVER:
-                if (btn1.contains(tx, ty)) gameState = GameState.PLAYING;        // rejouer
-                else if (btn2.contains(tx, ty)) gameState = GameState.START;     // accueil
+                if (isDown) {
+                    if (btn1.contains(tx, ty)) startNewGame();
+                    else if (btn2.contains(tx, ty)) { resetGame(); gameState = GameState.START; }
+                }
                 break;
         }
         return true;
