@@ -41,37 +41,35 @@ public class GameView extends View {
 
     private static class Obstacle {
         ObstacleType type;
-        float pos;          // position le long du parcours (comme distance)
-        float offsetX;      // décalage visuel gauche/droite
-        boolean resolved;   // true une fois que l'obstacle a touché le vaisseau
+        float pos; // position le long du parcours (comme distance)
+        float offsetX; // décalage visuel gauche/droite
+        boolean resolved; // true une fois que l'obstacle a touché le vaisseau
     }
 
     private final List<Obstacle> obstacles = new ArrayList<>();
-    private int hitCount;   // compteur d'impacts : conservé mais non affiché pour l'instant
     private int hitFlash;
-
     private static final int OBSTACLE_COUNT = 12;
-    private static final float ASTEROID_PROBABILITY = 0.65f;   // sinon : trou noir
+    private static final float ASTEROID_PROBABILITY = 0.65f; // sinon - trou noir
 
 
     private static final float LEVEL_LENGTH_FACTOR = 10f;
     private static final float MIN_SPEED_FACTOR = 0.003f;
     private static final float MAX_SPEED_FACTOR = 0.012f;
-    private static final float ALERT_DIST_FACTOR = 0.6f;     // fenêtre d'esquive (x hauteur d'écran)
+    private static final float ALERT_DIST_FACTOR = 0.6f; // fenêtre d'esquive (x hauteur d'écran) - temps dont dispose le joueur pour réagir
 
     /* SANTÉ ET SCORE */
     private static final int START_HEALTH = 100;
-    private static final int ASTEROID_DAMAGE = 20;           // santé perdue par astéroïde touché
-    private static final int EVADE_POINTS = 50;              // points gagnés par obstacle évité
-    private static final boolean DEBUG_BUTTONS = true;       // boutons de test (à mettre à false à la fin)
+    private static final int ASTEROID_DAMAGE = 20; // santé perdue par astéroïde touché
+    private static final int EVADE_POINTS = 50; // points gagnés par obstacle évité
+    private static final boolean DEBUG_BUTTONS = true; // boutons de test (à mettre à false à la fin)
 
     private float distance, levelLength, speed, minSpeed, maxSpeed, alertDist;
     private boolean thrust;
 
-    private int health;          // santé du vaisseau (0 = détruit)
-    private int score;           // points
-    private int evadedCount;     // obstacles évités
-    private boolean won;         // true = arrivé au point B, false = vaisseau détruit
+    private int health; // santé du vaisseau (0 = détruit)
+    private int score; // points gagnés
+    private int evadedCount; // obstacles évités
+    private boolean won; // true = arrivé au point B, false = vaisseau détruit
 
     /* VAISSEAU */
     private float shipX, shipY, shipSize;
@@ -81,7 +79,7 @@ public class GameView extends View {
     private static final int STAR_COUNT = 40;
     private final float[] starX = new float[STAR_COUNT];
     private final float[] starY = new float[STAR_COUNT];
-    private final float[] starDepth = new float[STAR_COUNT];   // 0.3 à 1 : plus c'est grand, plus c'est rapide
+    private final float[] starDepth = new float[STAR_COUNT]; // 0.3 à 1: plus c'est grand, plus c'est rapide
     private float starSpeed;
     private final Random rnd = new Random();
 
@@ -105,6 +103,8 @@ public class GameView extends View {
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
+
+    /* CONSTRUCTEUR */
     public GameView(Context context) {
         super(context);
         settings = new Settings(context);
@@ -157,6 +157,8 @@ public class GameView extends View {
         }
     };
 
+
+    /* ACTIONS-FONCTIONS DE BASE */
     public void startGame() {
         removeCallbacks(gameLoop);
         post(gameLoop);
@@ -177,6 +179,20 @@ public class GameView extends View {
         super.onDetachedFromWindow();
         stopGame();
     }
+
+    private void resetGame() {
+        distance = 0;
+        speed = minSpeed;
+        thrust = false;
+        hitFlash = 0;
+        health = START_HEALTH;
+        score = 0;
+        evadedCount = 0;
+        won = false;
+        generateObstacles();}
+    private void startNewGame() { resetGame(); setState(GameState.PLAYING); }
+    private void pauseGame() { thrust = false; setState(GameState.PAUSED); }
+
 
     /* DIMENSIONS DES OBJETS */
     @Override
@@ -224,39 +240,23 @@ public class GameView extends View {
         resetGame();
     }
 
-    private void resetGame() {
-        distance = 0;
-        speed = minSpeed;
-        thrust = false;
-        hitCount = 0;
-        hitFlash = 0;
-        health = START_HEALTH;
-        score = 0;
-        evadedCount = 0;
-        won = false;
-        generateObstacles();}
-    private void startNewGame() { resetGame(); gameState = GameState.PLAYING; }
-    private void pauseGame() { thrust = false; gameState = GameState.PAUSED; }
-
     /* MISE À JOUR*/
     private void update() {
-        // Les étoiles ne défilent que pendant la partie
-        if (gameState != GameState.PLAYING) return;
-
-        // La vitesse tend vers le max si on maintient le bouton, vers le min sinon
+        // vitesse vers le max si on maintient le bouton, sinon vers min
         float target = thrust ? maxSpeed : minSpeed;
         speed += (target - speed) * 0.08f;
         distance += speed;
 
+        // étoiles
         for (int i = 0; i < STAR_COUNT; i++) {
             starY[i] += speed * starDepth[i];
-            if (starY[i] > getHeight()) {       // sortie en bas -> réapparition en haut
+            if (starY[i] > getHeight()) { // disparition en bas --> réapparition en haut
                 starY[i] = 0;
                 starX[i] = rnd.nextFloat() * getWidth();
             }
         }
 
-        // Un obstacle non évité atteint le vaisseau
+        // obstacle non évité touche le vaisseau
         for (Obstacle o : obstacles) {
             if (o.resolved) continue;
             float dist = o.pos - distance;
@@ -266,13 +266,14 @@ public class GameView extends View {
         }
         if (hitFlash > 0) hitFlash--;
 
-        // Santé à 0 -> défaite
+        // santé à 0 --> défaite
         if (health <= 0) {
             health = 0;
             won = false;
             thrust = false;
             setState(GameState.GAME_OVER);
         }
+        // arrivée au point B --> victoire
         else if (distance >= levelLength) {
             distance = levelLength;
             won = true;
@@ -281,21 +282,20 @@ public class GameView extends View {
         }
     }
 
-    /* Un obstacle touche le vaisseau */
+    /* obstacle touche le vaisseau */
     private void onObstacleHit(Obstacle o) {
         o.resolved = true;
-        hitCount++;
         hitFlash = 15;
         if (o.type == ObstacleType.ASTEROID) {
-            health = Math.max(0, health - ASTEROID_DAMAGE);   // dégâts partiels
+            health = Math.max(0, health - ASTEROID_DAMAGE); // dégâts partiels
         } else {
-            health = 0;                                        // trou noir : destruction immédiate
+            health = 0; // trou noir: destruction immédiate
         }
         // TODO plus tard : vibration quand un astéroïde touche le vaisseau
     }
 
-    /* Esquive : évite l'obstacle le plus proche du type demandé, s'il est dans la fenêtre d'esquive.
-       Plus tard : appelée par l'accéléromètre (ASTEROID) et par le micro (BLACK_HOLE). */
+    /* esquive: évite l'obstacle le plus proche du type demandé, s'il est dans la fenêtre d'esquive
+       plus tard: appelée par l'accéléromètre (ASTEROID) et par le micro (BLACK_HOLE) */
     private void tryEvade(ObstacleType type) {
         if (gameState != GameState.PLAYING) return;
         Obstacle best = null;
@@ -330,7 +330,7 @@ public class GameView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        drawStars(canvas);   // le fond d'étoiles est commun à tous les écrans
+        drawStars(canvas); // le fond d'étoiles est commun à tous les écrans
 
         switch (gameState) {
             case START:
@@ -340,7 +340,7 @@ public class GameView extends View {
                 drawGame(canvas);
                 break;
             case PAUSED:
-                drawGame(canvas);          // la partie reste visible derrière
+                drawGame(canvas); // la partie reste visible derrière
                 drawPauseScreen(canvas);
                 break;
             case GAME_OVER:
@@ -349,6 +349,7 @@ public class GameView extends View {
         }
     }
 
+    /* étoiles */
     private void drawStars(Canvas canvas) {
         fillPaint.setColor(Color.WHITE);
         for (int i = 0; i < STAR_COUNT; i++) {
@@ -358,6 +359,7 @@ public class GameView extends View {
         fillPaint.setAlpha(255);
     }
 
+    /* vaisseau */
     private void drawShip(Canvas canvas) {
         canvas.save();
         canvas.translate(shipX, shipY);
@@ -370,16 +372,17 @@ public class GameView extends View {
         canvas.restore();
     }
 
+    /* obstacles */
     private void drawObstacles(Canvas canvas) {
         int w = getWidth();
         int h = getHeight();
-        Obstacle nearestAlert = null;   // obstacle le plus proche dans la fenêtre d'esquive
+        Obstacle nearestAlert = null; // obstacle le plus proche
         for (Obstacle o : obstacles) {
             if (o.resolved) continue;
             float dist = o.pos - distance;
-            float oy = shipY - dist;                     // plus l'obstacle est loin, plus il est haut
+            float oy = shipY - dist; // plus l'obstacle est loin, plus il est haut
             float r = w * (o.type == ObstacleType.ASTEROID ? 0.07f : 0.09f);
-            if (oy < -r || oy > h + r) continue;         // hors écran : on ne dessine pas
+            if (oy < -r || oy > h + r) continue; // hors écran - on ne dessine pas
             float ox = shipX + o.offsetX;
 
             if (o.type == ObstacleType.ASTEROID) {
@@ -395,15 +398,11 @@ public class GameView extends View {
                 canvas.drawCircle(ox, oy, r, strokePaint);
             }
 
-            // Dans la fenêtre d'esquive : cercle d'alerte autour de l'obstacle
-            if (dist > 0 && dist < alertDist) {
-                strokePaint.setColor(o.type == ObstacleType.ASTEROID ? Color.YELLOW : Color.MAGENTA);
-                canvas.drawCircle(ox, oy, r * 1.4f, strokePaint);
-                if (nearestAlert == null || o.pos < nearestAlert.pos) nearestAlert = o;
-            }
+            // alertes pour éviter les obstacles
+            if (nearestAlert == null || o.pos < nearestAlert.pos) nearestAlert = o;
         }
 
-        // Consigne affichée pour l'obstacle le plus proche
+        // affichage des alertes pour l'obstacle le plus proche
         if (nearestAlert != null) {
             boolean ast = nearestAlert.type == ObstacleType.ASTEROID;
             textPaint.setColor(ast ? Color.YELLOW : Color.MAGENTA);
@@ -411,6 +410,7 @@ public class GameView extends View {
         }
     }
 
+    /* bouton de base */
     private void drawButton(Canvas canvas, RectF r, String label, int color) {
         fillPaint.setColor(color);
         canvas.drawRoundRect(r, 24, 24, fillPaint);
@@ -419,6 +419,7 @@ public class GameView extends View {
         canvas.drawText(label, r.centerX(), ty, textPaint);
     }
 
+    /* titre de base */
     private void drawTitle(Canvas canvas, String text, float y) {
         textPaint.setTextSize(getWidth() * 0.09f);
         textPaint.setColor(Color.WHITE);
@@ -426,62 +427,65 @@ public class GameView extends View {
         textPaint.setTextSize(getWidth() * 0.05f);
     }
 
-    /* Barre de progression : A (départ) ---- B (arrivée) */
+    /* barre de progression */
     private void drawProgressBar(Canvas canvas) {
         float progress = Math.min(1f, distance / levelLength);
 
-        // Fond de la barre
+        // fond de la barre
         fillPaint.setColor(Color.argb(120, 255, 255, 255));
         canvas.drawRoundRect(progressBar, 10, 10, fillPaint);
 
-        // Partie remplie (on modifie temporairement le côté droit du rectangle)
+        // remplissage d'une partie
         float fullRight = progressBar.right;
         progressBar.right = progressBar.left + (fullRight - progressBar.left) * progress;
         fillPaint.setColor(Color.rgb(0, 200, 220));
         canvas.drawRoundRect(progressBar, 10, 10, fillPaint);
-        progressBar.right = fullRight;   // on remet la bonne valeur
+        progressBar.right = fullRight; // on remet la bonne valeur
 
-        // Repères A et B
+        // repères A et B
         textPaint.setColor(Color.WHITE);
         float ty = progressBar.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f;
         canvas.drawText("A", getWidth() * 0.05f, ty, textPaint);
         canvas.drawText("B", getWidth() * 0.95f, ty, textPaint);
     }
 
-    /* Santé et score (en haut à gauche) */
+    /* santé et score (en haut à gauche) */
     private void drawHud(Canvas canvas) {
         int w = getWidth();
         int h = getHeight();
 
         textPaint.setTextAlign(Paint.Align.LEFT);
 
-        // Santé : la couleur change selon le niveau
-        textPaint.setColor(health > 50 ? Color.rgb(80, 220, 100)
-                : health > 25 ? Color.rgb(250, 190, 0) : Color.RED);
+        // santé: la couleur change selon le niveau
+        textPaint.setColor(health > 50 ? Color.rgb(80, 220, 100) : health > 25 ? Color.rgb(250, 190, 0) : Color.RED);
         canvas.drawText("Santé : " + health, w * 0.04f, h * 0.055f, textPaint);
 
-        // Score
+        // score
         textPaint.setColor(Color.WHITE);
         canvas.drawText("Score : " + score, w * 0.04f, h * 0.095f, textPaint);
 
         textPaint.setTextAlign(Paint.Align.CENTER);
     }
 
-    /* Ligne de texte centrée (écran de fin) */
+    /* texte pour les résultats (écran de fin) */
     private void drawLine(Canvas canvas, String text, float y) {
         textPaint.setColor(Color.WHITE);
         canvas.drawText(text, getWidth() / 2f, y, textPaint);
     }
 
+
+    /*ECRANS */
+
     /* Écran Accueil */
     private void drawStartScreen(Canvas canvas) {
-        drawTitle(canvas, "SPACE ESCAPE", getHeight() * 0.28f);
+        drawTitle(canvas, "PATATENOVA", getHeight() * 0.28f);
 
         // libellé du champ pseudo
         textPaint.setColor(Color.rgb(0, 200, 220));
         canvas.drawText("Pseudo", getWidth() / 2f,
                 nameFieldRect.top - getHeight() * 0.012f, textPaint);
 
+        
         drawButton(canvas, btn1, "JOUER", Color.rgb(40, 140, 70));
     }
 
@@ -496,13 +500,7 @@ public class GameView extends View {
             fillPaint.setAlpha(255);
         }
 
-        drawHud(canvas);   // santé et score
-
-        // Compteur d'impacts : désactivé pour l'instant
-        // textPaint.setColor(Color.WHITE);
-        // textPaint.setTextAlign(Paint.Align.LEFT);
-        // canvas.drawText("Impacts : " + hitCount, getWidth() * 0.04f, getHeight() * 0.135f, textPaint);
-        // textPaint.setTextAlign(Paint.Align.CENTER);
+        drawHud(canvas); // santé et score
 
         drawButton(canvas, btnPause, "PAUSE", Color.argb(180, 80, 80, 100));
         drawProgressBar(canvas);
@@ -529,7 +527,6 @@ public class GameView extends View {
         drawTitle(canvas, won ? "MISSION RÉUSSIE" : "VAISSEAU DÉTRUIT", h * 0.10f);
         drawLine(canvas, "Score : " + score, h * 0.16f);
         drawLine(canvas, "Obstacles évités : " + evadedCount, h * 0.20f);
-        drawLine(canvas, "Santé restante : " + health, h * 0.24f);
         drawScoreboard(canvas);
         drawButton(canvas, btn1, "Rejouer", Color.rgb(40, 140, 70));
         drawButton(canvas, btn2, "Accueil", Color.rgb(40, 90, 200));
@@ -577,15 +574,31 @@ public class GameView extends View {
                 break;
 
             case PLAYING:
-                if (btnPause.contains(tx, ty)) setState(GameState.PAUSED);
-                else if (btnEnd.contains(tx, ty)) setState(GameState.GAME_OVER);
+                // thrust = true si AU MOINS UN doigt est sur le bouton AVANCER
+                thrust = false;
+                for (int i = 0; i < event.getPointerCount(); i++) {
+                    if (isUp && i == idx) continue;   // ce doigt vient d'être relevé
+                    if (btnAdvance.contains(event.getX(i), event.getY(i))) thrust = true;
+                }
+                if (masked == MotionEvent.ACTION_CANCEL) thrust = false;
+
+                if (isDown) {
+                    if (btnPause.contains(tx, ty)) {
+                        pauseGame();
+                    } else if (DEBUG_BUTTONS && btnTestShake.contains(tx, ty)) {
+                        tryEvade(ObstacleType.ASTEROID); // alternative pour accéléromètre
+                    } else if (DEBUG_BUTTONS && btnTestScream.contains(tx, ty)) {
+                        tryEvade(ObstacleType.BLACK_HOLE); // alternative pour micro
+                    }
+                }
                 break;
 
             case PAUSED:
-                if (btn1.contains(tx, ty)) setState(GameState.PLAYING);        // reprendre
-                    // onTouchEvent, case PAUSED
-                else if (btn2.contains(tx, ty)) { resetGame(); setState(GameState.PLAYING); }   // recommencer   // recommencer (rien à réinitialiser pour l'instant)
-                else if (btn3.contains(tx, ty)) setState(GameState.START);     // abandonner
+                if (isDown) {
+                    if (btn1.contains(tx, ty)) setState(GameState.PLAYING);   // reprendre (sans réinitialiser)
+                    else if (btn2.contains(tx, ty)) startNewGame();           // recommencer
+                    else if (btn3.contains(tx, ty)) { resetGame(); setState(GameState.START); }   // abandonner
+                }
                 break;
 
             case GAME_OVER:
