@@ -24,6 +24,18 @@ public class GameView extends View {
     }
     private GameState gameState = GameState.START;
 
+    /* [PSEUDO] COMMUNICATION AVEC L'ACTIVITÉ */
+    public interface Listener {
+        void onStateChanged(GameState newState);   // l'écran a changé (afficher/cacher le champ)
+        void onPlayRequested();                    // appui sur JOUER (l'activité valide le pseudo)
+        void onBackgroundTapped();                 // appui ailleurs sur l'accueil (fermer le clavier)
+    }
+    private Listener listener;
+
+    /* [PSEUDO] */
+    private String playerName = Settings.DEFAULT_NAME;
+    private final RectF nameFieldRect = new RectF();   // emplacement du champ de saisie (accueil)
+
     /* OBSTACLES */
     enum ObstacleType { ASTEROID, BLACK_HOLE }
 
@@ -82,6 +94,11 @@ public class GameView extends View {
     private final RectF btnTestShake = new RectF();   // test : simule la secousse
     private final RectF btnTestScream = new RectF();  // test : simule le cri
     private final RectF progressBar = new RectF();
+    private final RectF btnEnd = new RectF();     // bouton de test pour finir la partie
+
+    private final Settings settings;
+    private List<Settings.ScoreEntry> scores = new ArrayList<>();
+    private int lastRank = -1;   // place de la partie qui vient de finir (-1 = hors top 5)
 
     // ---------------- Peintures (créées une seule fois) ----------------
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -90,10 +107,44 @@ public class GameView extends View {
 
     public GameView(Context context) {
         super(context);
+        settings = new Settings(context);
         setBackgroundColor(Color.rgb(8, 10, 24));
         textPaint.setColor(Color.WHITE);
         textPaint.setTextAlign(Paint.Align.CENTER);
         strokePaint.setStyle(Paint.Style.STROKE);
+    }
+
+    /* [PSEUDO] API PUBLIQUE POUR L'ACTIVITÉ */
+
+    public void setListener(Listener listener) {
+        this.listener = listener;
+    }
+
+    public GameState getState() {
+        return gameState;
+    }
+
+    public RectF getNameFieldRect() {
+        return nameFieldRect;
+    }
+
+    /** Appelée par l'activité une fois le pseudo validé. */
+    public void startPlaying(String name) {
+        playerName = name;
+        resetGame();
+        setState(GameState.PLAYING);
+    }
+
+    /** Seul endroit où l'état change : on prévient toujours l'activité. */
+    private void setState(GameState newState) {
+        if (gameState == newState) return;
+        gameState = newState;
+        if (newState == GameState.GAME_OVER) {
+            lastRank = settings.addScore(playerName, score);
+            scores = settings.getScores();
+        }
+        if (listener != null) listener.onStateChanged(newState);
+        invalidate();
     }
 
     /* BOUCLE DE JEU */
@@ -116,7 +167,7 @@ public class GameView extends View {
     }
 
     public void onActivityPause() {
-        if (gameState == GameState.PLAYING) pauseGame();
+        if (gameState == GameState.PLAYING) setState(GameState.PAUSED);   // [PSEUDO] setState;
         stopGame();
         invalidate();
     }
@@ -166,6 +217,9 @@ public class GameView extends View {
 
         textPaint.setTextSize(w * 0.05f);
         strokePaint.setStrokeWidth(w * 0.006f);
+        // champ pseudo : même largeur et même hauteur que le bouton JOUER, placé au-dessus
+        float gap = h * 0.11f;
+        nameFieldRect.set(btn1.left, btn1.top - gap, btn1.right, btn1.bottom - gap);
 
         resetGame();
     }
@@ -217,14 +271,13 @@ public class GameView extends View {
             health = 0;
             won = false;
             thrust = false;
-            gameState = GameState.GAME_OVER;
+            setState(GameState.GAME_OVER);
         }
-        // Arrivée au point B -> fin de partie (victoire)
         else if (distance >= levelLength) {
             distance = levelLength;
             won = true;
             thrust = false;
-            gameState = GameState.GAME_OVER;
+            setState(GameState.GAME_OVER);
         }
     }
 
@@ -423,8 +476,13 @@ public class GameView extends View {
     /* Écran Accueil */
     private void drawStartScreen(Canvas canvas) {
         drawTitle(canvas, "SPACE ESCAPE", getHeight() * 0.28f);
+
+        // libellé du champ pseudo
+        textPaint.setColor(Color.rgb(0, 200, 220));
+        canvas.drawText("Pseudo", getWidth() / 2f,
+                nameFieldRect.top - getHeight() * 0.012f, textPaint);
+
         drawButton(canvas, btn1, "JOUER", Color.rgb(40, 140, 70));
-        // TODO plus tard : pseudo, options
     }
 
     /* Écran Partie */
@@ -468,13 +526,33 @@ public class GameView extends View {
     /* Écran Fin Partie */
     private void drawGameOverScreen(Canvas canvas) {
         int h = getHeight();
-        drawTitle(canvas, won ? "MISSION RÉUSSIE" : "VAISSEAU DÉTRUIT", h * 0.22f);
-        drawLine(canvas, "Score : " + score, h * 0.32f);
-        drawLine(canvas, "Obstacles évités : " + evadedCount, h * 0.37f);
-        drawLine(canvas, "Santé restante : " + health, h * 0.42f);
-        // drawLine(canvas, "Impacts subis : " + hitCount, h * 0.47f);   // désactivé pour l'instant
+        drawTitle(canvas, won ? "MISSION RÉUSSIE" : "VAISSEAU DÉTRUIT", h * 0.10f);
+        drawLine(canvas, "Score : " + score, h * 0.16f);
+        drawLine(canvas, "Obstacles évités : " + evadedCount, h * 0.20f);
+        drawLine(canvas, "Santé restante : " + health, h * 0.24f);
+        drawScoreboard(canvas);
         drawButton(canvas, btn1, "Rejouer", Color.rgb(40, 140, 70));
         drawButton(canvas, btn2, "Accueil", Color.rgb(40, 90, 200));
+    }
+
+    private void drawScoreboard(Canvas canvas) {
+        int w = getWidth();
+        int h = getHeight();
+
+        textPaint.setColor(Color.rgb(0, 200, 220));
+        canvas.drawText("MEILLEURS SCORES", w / 2f, h * 0.31f, textPaint);
+
+        for (int i = 0; i < scores.size(); i++) {
+            Settings.ScoreEntry e = scores.get(i);
+            float y = h * (0.35f + 0.04f * i);
+            // la ligne de la partie qui vient de finir est en jaune
+            textPaint.setColor(i == lastRank ? Color.rgb(255, 215, 0) : Color.WHITE);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            canvas.drawText((i + 1) + ". " + e.name, w * 0.12f, y, textPaint);
+            textPaint.setTextAlign(Paint.Align.RIGHT);
+            canvas.drawText(String.valueOf(e.score), w * 0.88f, y, textPaint);
+        }
+        textPaint.setTextAlign(Paint.Align.CENTER);   // on remet l'alignement par défaut
     }
 
     /* NAVIGATION ENTRE LES ÉCRANS */
@@ -489,42 +567,31 @@ public class GameView extends View {
 
         switch (gameState) {
             case START:
-                if (isDown && btn1.contains(tx, ty)) startNewGame();
+                if (btn1.contains(tx, ty)) {
+                    // [PSEUDO] c'est l'activité qui valide le pseudo, puis rappelle startPlaying()
+                    if (listener != null) listener.onPlayRequested();
+                    else startPlaying(Settings.DEFAULT_NAME);
+                } else if (listener != null) {
+                    listener.onBackgroundTapped();   // ferme le clavier
+                }
                 break;
 
             case PLAYING:
-                // thrust = true si AU MOINS UN doigt est sur le bouton AVANCER
-                thrust = false;
-                for (int i = 0; i < event.getPointerCount(); i++) {
-                    if (isUp && i == idx) continue;   // ce doigt vient d'être relevé
-                    if (btnAdvance.contains(event.getX(i), event.getY(i))) thrust = true;
-                }
-                if (masked == MotionEvent.ACTION_CANCEL) thrust = false;
-
-                if (isDown) {
-                    if (btnPause.contains(tx, ty)) {
-                        pauseGame();
-                    } else if (DEBUG_BUTTONS && btnTestShake.contains(tx, ty)) {
-                        tryEvade(ObstacleType.ASTEROID);     // sera remplacé par l'accéléromètre
-                    } else if (DEBUG_BUTTONS && btnTestScream.contains(tx, ty)) {
-                        tryEvade(ObstacleType.BLACK_HOLE);   // sera remplacé par le micro
-                    }
-                }
+                if (btnPause.contains(tx, ty)) setState(GameState.PAUSED);
+                else if (btnEnd.contains(tx, ty)) setState(GameState.GAME_OVER);
                 break;
 
             case PAUSED:
-                if (isDown) {
-                    if (btn1.contains(tx, ty)) gameState = GameState.PLAYING;   // reprendre (sans réinitialiser)
-                    else if (btn2.contains(tx, ty)) startNewGame();             // recommencer
-                    else if (btn3.contains(tx, ty)) { resetGame(); gameState = GameState.START; }
-                }
+                if (btn1.contains(tx, ty)) setState(GameState.PLAYING);        // reprendre
+                    // onTouchEvent, case PAUSED
+                else if (btn2.contains(tx, ty)) { resetGame(); setState(GameState.PLAYING); }   // recommencer   // recommencer (rien à réinitialiser pour l'instant)
+                else if (btn3.contains(tx, ty)) setState(GameState.START);     // abandonner
                 break;
 
             case GAME_OVER:
-                if (isDown) {
-                    if (btn1.contains(tx, ty)) startNewGame();
-                    else if (btn2.contains(tx, ty)) { resetGame(); gameState = GameState.START; }
-                }
+                // onTouchEvent, case GAME_OVER
+                if (btn1.contains(tx, ty)) { resetGame(); setState(GameState.PLAYING); }        // rejouer        // rejouer
+                else if (btn2.contains(tx, ty)) setState(GameState.START);     // accueil
                 break;
         }
         return true;
