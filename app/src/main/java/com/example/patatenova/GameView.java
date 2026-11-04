@@ -8,10 +8,13 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.view.MotionEvent;
 import android.view.View;
+import android.os.SystemClock;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+
+
 
 public class GameView extends View {
 
@@ -56,6 +59,15 @@ public class GameView extends View {
     private static final float MIN_SPEED_FACTOR = 0.003f;
     private static final float MAX_SPEED_FACTOR = 0.012f;
     private static final float ALERT_DIST_FACTOR = 0.6f; // fenêtre d'esquive (x hauteur d'écran) - temps dont dispose le joueur pour réagir
+
+    /* MICRO */
+    private static final long SCREAM_HOLD_MS = 250;   // durée pendant laquelle le cri doit dépasser le seuil
+    private MicMonitor mic;                           // null = micro refusé ou indisponible => bouton de test
+    private long screamHoldMs;
+    private long lastTickMs;
+    private final RectF micMeter = new RectF();
+
+    public void setMic(MicMonitor mic) { this.mic = mic; }
 
     /* SANTÉ ET SCORE */
     private static final int START_HEALTH = 100;
@@ -147,6 +159,36 @@ public class GameView extends View {
         invalidate();
     }
 
+    /** Le bouton "test : crier" sert d'alternative quand le micro n'est pas utilisable. */
+    private boolean screamButtonVisible() { return DEBUG_BUTTONS || mic == null; }
+
+    private boolean blackHoleAlert() {
+        for (Obstacle o : obstacles) {
+            if (o.resolved || o.type != ObstacleType.BLACK_HOLE) continue;
+            float dist = o.pos - distance;
+            if (dist > 0 && dist < alertDist) return true;
+        }
+        return false;
+    }
+
+    private void updateScream() {
+        long now = SystemClock.uptimeMillis();
+        long dt = Math.min(now - lastTickMs, 50);
+        lastTickMs = now;
+
+        if (mic == null || !mic.isReady() || !blackHoleAlert()) {
+            screamHoldMs = 0;
+            return;
+        }
+        if (mic.getLevel() >= mic.getThreshold()) screamHoldMs += dt;
+        else screamHoldMs = Math.max(0, screamHoldMs - 2 * dt);   // retombe vite : un bruit bref ne compte pas
+
+        if (screamHoldMs >= SCREAM_HOLD_MS) {
+            tryEvade(ObstacleType.BLACK_HOLE);
+            screamHoldMs = 0;
+        }
+    }
+
     /* BOUCLE DE JEU */
     private final Runnable gameLoop = new Runnable() {
         @Override
@@ -189,6 +231,7 @@ public class GameView extends View {
         score = 0;
         evadedCount = 0;
         won = false;
+        screamHoldMs = 0;
         generateObstacles();}
     private void startNewGame() { resetGame(); setState(GameState.PLAYING); }
     private void pauseGame() { thrust = false; setState(GameState.PAUSED); }
@@ -231,6 +274,7 @@ public class GameView extends View {
         btnTestScream.set(w * 0.52f, h * 0.77f, w * 0.96f, h * 0.83f);
         progressBar.set(w * 0.10f, h * 0.12f, w * 0.90f, h * 0.135f);   // légèrement plus bas pour laisser la place à santé + score
 
+        micMeter.set(w * 0.15f, h * 0.325f, w * 0.85f, h * 0.345f);
         textPaint.setTextSize(w * 0.05f);
         strokePaint.setStrokeWidth(w * 0.006f);
         // champ pseudo : même largeur et même hauteur que le bouton JOUER, placé au-dessus
@@ -255,6 +299,8 @@ public class GameView extends View {
                 starX[i] = rnd.nextFloat() * getWidth();
             }
         }
+
+        updateScream();
 
         // obstacle non évité touche le vaisseau
         for (Obstacle o : obstacles) {
@@ -399,7 +445,14 @@ public class GameView extends View {
             }
 
             // alertes pour éviter les obstacles
-            if (nearestAlert == null || o.pos < nearestAlert.pos) nearestAlert = o;
+            if (blackHoleAlert()) {
+                textPaint.setColor(Color.MAGENTA);
+                canvas.drawText("Trou noir en approche !", w / 2f, h * 0.25f, textPaint);
+                canvas.drawText("Criez le plus fort possible !", w / 2f, h * 0.29f, textPaint);
+            } else if (nearestAlert != null) {
+                textPaint.setColor(Color.YELLOW);
+                canvas.drawText("SECOUEZ !", w / 2f, h * 0.27f, textPaint);
+            }
         }
 
         // affichage des alertes pour l'obstacle le plus proche
@@ -493,6 +546,7 @@ public class GameView extends View {
     private void drawGame(Canvas canvas) {
         drawObstacles(canvas);
         drawShip(canvas);
+        if (blackHoleAlert()) drawScreamFeedback(canvas);
         if (hitFlash > 0) {
             fillPaint.setColor(Color.RED);
             fillPaint.setAlpha(hitFlash * 8);
@@ -506,6 +560,8 @@ public class GameView extends View {
         drawProgressBar(canvas);
         if (DEBUG_BUTTONS) {
             drawButton(canvas, btnTestShake, "test : secouer", Color.argb(160, 120, 120, 0));
+        }
+        if (screamButtonVisible()) {
             drawButton(canvas, btnTestScream, "test : crier", Color.argb(160, 120, 0, 120));
         }
         drawButton(canvas, btnAdvance, "AVANCER (maintenir)", thrust ? Color.rgb(230, 120, 0) : Color.rgb(40, 90, 200));
@@ -552,6 +608,35 @@ public class GameView extends View {
         textPaint.setTextAlign(Paint.Align.CENTER);   // on remet l'alignement par défaut
     }
 
+    /** Feedback de la voix : ondes autour du vaisseau + jauge de volume avec repère du seuil. */
+    private void drawScreamFeedback(Canvas canvas) {
+        if (mic == null || !mic.isRunning()) return;
+        int w = getWidth();
+        float level = mic.getLevel();
+        float threshold = mic.getThreshold();
+        int color = level >= threshold ? Color.rgb(80, 255, 140) : Color.rgb(0, 200, 220);
+
+        // 1. Ondes autour du vaisseau : elles s'élargissent avec le volume
+        for (int i = 0; i < 3; i++) {
+            float r = shipSize * 1.5f + level * w * 0.25f * (i + 1) / 3f;
+            strokePaint.setColor(color);
+            strokePaint.setAlpha((int) (220 * level / (i + 1)));
+            canvas.drawCircle(shipX, shipY, r, strokePaint);
+        }
+        strokePaint.setAlpha(255);
+
+        // 2. Jauge de volume : devient verte au-dessus du seuil (trait blanc)
+        fillPaint.setColor(Color.argb(120, 255, 255, 255));
+        canvas.drawRoundRect(micMeter, 10, 10, fillPaint);
+        fillPaint.setColor(color);
+        float fillRight = micMeter.left + micMeter.width() * level;
+        canvas.drawRoundRect(micMeter.left, micMeter.top, fillRight, micMeter.bottom, 10, 10, fillPaint);
+
+        float markX = micMeter.left + micMeter.width() * threshold;
+        strokePaint.setColor(Color.WHITE);
+        canvas.drawLine(markX, micMeter.top - 12, markX, micMeter.bottom + 12, strokePaint);
+    }
+
     /* NAVIGATION ENTRE LES ÉCRANS */
     @Override
     public boolean onTouchEvent(MotionEvent event) {
@@ -587,8 +672,8 @@ public class GameView extends View {
                         pauseGame();
                     } else if (DEBUG_BUTTONS && btnTestShake.contains(tx, ty)) {
                         tryEvade(ObstacleType.ASTEROID); // alternative pour accéléromètre
-                    } else if (DEBUG_BUTTONS && btnTestScream.contains(tx, ty)) {
-                        tryEvade(ObstacleType.BLACK_HOLE); // alternative pour micro
+                    } else if (screamButtonVisible() && btnTestScream.contains(tx, ty)) {
+                        tryEvade(ObstacleType.BLACK_HOLE); // alternative si le micro est refusé
                     }
                 }
                 break;
@@ -603,8 +688,10 @@ public class GameView extends View {
 
             case GAME_OVER:
                 // onTouchEvent, case GAME_OVER
-                if (btn1.contains(tx, ty)) { resetGame(); setState(GameState.PLAYING); }        // rejouer        // rejouer
-                else if (btn2.contains(tx, ty)) setState(GameState.START);     // accueil
+                if (isDown) {
+                    if (btn1.contains(tx, ty)) startNewGame();                                    // rejouer
+                    else if (btn2.contains(tx, ty)) { resetGame(); setState(GameState.START); }   // accueil
+                }
                 break;
         }
         return true;

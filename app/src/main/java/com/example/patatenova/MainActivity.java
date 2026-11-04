@@ -19,6 +19,11 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import com.example.patatenova.GameView;
+import android.Manifest;
+import android.content.pm.PackageManager;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity implements GameView.Listener{
 
@@ -26,6 +31,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
     private EditText nameField;
     private FrameLayout root;
     private Settings settings;
+    private MicMonitor micMonitor;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -35,6 +41,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
 
         gameView = new GameView(this);
         gameView.setListener(this);
+        micMonitor = new MicMonitor();
 
         nameField = createNameField();
 
@@ -70,6 +77,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
     protected void onPause() {
         super.onPause();
         releaseFocus();                    // ferme le clavier s'il est ouvert
+        micMonitor.stop();
         gameView.onActivityPause();
     }
     @Override
@@ -78,8 +86,17 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
         nameField.setText("");
     }
 
+
+
     /* ---------------- Création et placement du champ ---------------- */
 
+    // Réponse à la demande de permission : on lance la partie dans tous les cas.
+    // Si c'est refusé, GameView affiche le bouton "test : crier" à la place du micro.
+    private final ActivityResultLauncher<String> micPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+                gameView.setMic(granted ? micMonitor : null);
+                beginGame();
+            });
     private EditText createNameField() {
         EditText field = new EditText(this);
         field.setHint("Patate");
@@ -147,6 +164,11 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
     @Override
     public void onStateChanged(GameView.GameState newState) {
         applyState(newState);
+        if (newState == GameView.GameState.PLAYING && hasMicPermission()) {
+            gameView.setMic(micMonitor.start() ? micMonitor : null);   // null : micro indisponible, bouton de test
+        } else {
+            micMonitor.stop();
+        }
     }
 
     @Override
@@ -158,8 +180,20 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
         // 2. fermer le clavier
         releaseFocus();
 
-        // 3. rendre la main à GameView avec le nom à afficher ("Invité" si vide)
+        if (hasMicPermission()) {
+            gameView.setMic(micMonitor);
+            beginGame();
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);   // beginGame() est appelé dans la réponse
+        }
+    }
+    private void beginGame() {
         gameView.startPlaying(settings.getDisplayName());
+    }
+
+    private boolean hasMicPermission() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     @Override
