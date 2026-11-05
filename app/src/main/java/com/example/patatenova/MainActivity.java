@@ -32,6 +32,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
     private FrameLayout root;
     private Settings settings;
     private MicMonitor micMonitor;
+    private ShakeDetector shakeDetector;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -42,6 +43,8 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
         gameView = new GameView(this);
         gameView.setListener(this);
         micMonitor = new MicMonitor();
+        shakeDetector = new ShakeDetector(this);
+        shakeDetector.setListener(() -> gameView.onShake());
 
         nameField = createNameField();
 
@@ -71,6 +74,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
     protected void onResume() {
         super.onResume();
         gameView.startGame();
+        gameView.setShakeAvailable(shakeDetector.start());   // false: pas d'accéléromètre => bouton de test
     }
 
     @Override
@@ -78,6 +82,7 @@ public class MainActivity extends AppCompatActivity implements GameView.Listener
         super.onPause();
         releaseFocus();                    // ferme le clavier s'il est ouvert
         micMonitor.stop();
+        shakeDetector.stop();
         gameView.onActivityPause();
     }
     @Override

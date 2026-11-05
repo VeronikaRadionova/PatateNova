@@ -6,6 +6,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.view.MotionEvent;
 import android.view.View;
 import android.os.SystemClock;
@@ -68,6 +71,12 @@ public class GameView extends View {
     private final RectF micMeter = new RectF();
 
     public void setMic(MicMonitor mic) { this.mic = mic; }
+
+    /* SECOUSSE (accéléromètre) */
+    private boolean shakeAvailable;   // false = pas d'accéléromètre => bouton de test
+    public void setShakeAvailable(boolean available) { this.shakeAvailable = available; }
+    public void onShake() { tryEvade(ObstacleType.ASTEROID); } // appelée par l'activité à chaque secousse détectée
+    private boolean shakeButtonVisible() { return DEBUG_BUTTONS || !shakeAvailable; } // le bouton "test: secouer" sert d'alternative quand l'accéléromètre n'est pas utilisable
 
     /* SANTÉ ET SCORE */
     private static final int START_HEALTH = 100;
@@ -285,20 +294,27 @@ public class GameView extends View {
     }
 
     /* MISE À JOUR*/
-    private void update() {
-        // vitesse vers le max si on maintient le bouton, sinon vers min
-        float target = thrust ? maxSpeed : minSpeed;
-        speed += (target - speed) * 0.08f;
-        distance += speed;
-
-        // étoiles
+    /* étoiles : défilement à la vitesse donnée */
+    private void updateStars(float step) {
         for (int i = 0; i < STAR_COUNT; i++) {
-            starY[i] += speed * starDepth[i];
+            starY[i] += step * starDepth[i];
             if (starY[i] > getHeight()) { // disparition en bas --> réapparition en haut
                 starY[i] = 0;
                 starX[i] = rnd.nextFloat() * getWidth();
             }
         }
+    }
+
+    private void update() {
+        if (gameState == GameState.START || gameState == GameState.GAME_OVER) { updateStars(minSpeed); return; }
+        if (gameState != GameState.PLAYING) return;        // vitesse vers le max si on maintient le bouton, sinon vers min
+
+        float target = thrust ? maxSpeed : minSpeed;
+        speed += (target - speed) * 0.08f;
+        distance += speed;
+
+        // étoiles
+        updateStars(speed);
 
         updateScream();
 
@@ -325,6 +341,18 @@ public class GameView extends View {
             won = true;
             thrust = false;
             setState(GameState.GAME_OVER);
+        }
+    }
+
+    /* vibration quand un obstacle touche le vaisseau */
+    @SuppressWarnings("deprecation")
+    private void vibrate(long ms) {
+        Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
+        if (v == null || !v.hasVibrator()) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+        } else {
+            v.vibrate(ms);
         }
     }
 
@@ -422,7 +450,7 @@ public class GameView extends View {
     private void drawObstacles(Canvas canvas) {
         int w = getWidth();
         int h = getHeight();
-        Obstacle nearestAlert = null; // obstacle le plus proche
+        boolean asteroidAlert = false; // un astéroïde est dans la fenêtre d'esquive
         for (Obstacle o : obstacles) {
             if (o.resolved) continue;
             float dist = o.pos - distance;
@@ -444,22 +472,26 @@ public class GameView extends View {
                 canvas.drawCircle(ox, oy, r, strokePaint);
             }
 
-            // alertes pour éviter les obstacles
-            if (blackHoleAlert()) {
-                textPaint.setColor(Color.MAGENTA);
-                canvas.drawText("Trou noir en approche !", w / 2f, h * 0.25f, textPaint);
-                canvas.drawText("Criez le plus fort possible !", w / 2f, h * 0.29f, textPaint);
-            } else if (nearestAlert != null) {
-                textPaint.setColor(Color.YELLOW);
-                canvas.drawText("SECOUEZ !", w / 2f, h * 0.27f, textPaint);
+            // cercle d'alerte autour des obstacles dans la fenêtre d'esquive
+            if (dist > 0 && dist < alertDist) {
+                strokePaint.setColor(o.type == ObstacleType.ASTEROID ? Color.YELLOW : Color.MAGENTA);
+                canvas.drawCircle(ox, oy, r * 1.4f, strokePaint);
+                if (o.type == ObstacleType.ASTEROID) asteroidAlert = true;
             }
         }
 
-        // affichage des alertes pour l'obstacle le plus proche
-        if (nearestAlert != null) {
-            boolean ast = nearestAlert.type == ObstacleType.ASTEROID;
-            textPaint.setColor(ast ? Color.YELLOW : Color.MAGENTA);
-            canvas.drawText(ast ? "SECOUEZ !" : "CRIEZ !", w / 2f, h * 0.27f, textPaint);
+        // alertes pour éviter les obstacles (affichées une seule fois, hors de la boucle)
+        boolean blackHole = blackHoleAlert();
+        if (blackHole) {
+            textPaint.setColor(Color.MAGENTA);
+            canvas.drawText("Trou noir en approche !", w / 2f, h * 0.25f, textPaint);
+            canvas.drawText("Criez le plus fort possible !", w / 2f, h * 0.29f, textPaint);
+        }
+        if (asteroidAlert) {
+            textPaint.setColor(Color.YELLOW);
+            canvas.drawText("Météore en approche !", w / 2f, h * 0.25f, textPaint);
+            canvas.drawText("Secouer le téléphone le plus fort possible !", w / 2f, h * 0.29f, textPaint);
+
         }
     }
 
@@ -558,11 +590,11 @@ public class GameView extends View {
 
         drawButton(canvas, btnPause, "PAUSE", Color.argb(180, 80, 80, 100));
         drawProgressBar(canvas);
-        if (DEBUG_BUTTONS) {
-            drawButton(canvas, btnTestShake, "test : secouer", Color.argb(160, 120, 120, 0));
+        if (shakeButtonVisible()) {
+            drawButton(canvas, btnTestShake, "secouer", Color.argb(160, 120, 120, 0));
         }
         if (screamButtonVisible()) {
-            drawButton(canvas, btnTestScream, "test : crier", Color.argb(160, 120, 0, 120));
+            drawButton(canvas, btnTestScream, "crier", Color.argb(160, 120, 0, 120));
         }
         drawButton(canvas, btnAdvance, "AVANCER (maintenir)", thrust ? Color.rgb(230, 120, 0) : Color.rgb(40, 90, 200));
     }
@@ -670,7 +702,7 @@ public class GameView extends View {
                 if (isDown) {
                     if (btnPause.contains(tx, ty)) {
                         pauseGame();
-                    } else if (DEBUG_BUTTONS && btnTestShake.contains(tx, ty)) {
+                    } else if (shakeButtonVisible() && btnTestShake.contains(tx, ty)) {
                         tryEvade(ObstacleType.ASTEROID); // alternative pour accéléromètre
                     } else if (screamButtonVisible() && btnTestScream.contains(tx, ty)) {
                         tryEvade(ObstacleType.BLACK_HOLE); // alternative si le micro est refusé
