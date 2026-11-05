@@ -362,10 +362,11 @@ public class GameView extends View {
         hitFlash = 15;
         if (o.type == ObstacleType.ASTEROID) {
             health = Math.max(0, health - ASTEROID_DAMAGE); // dégâts partiels
+            vibrate(200);
         } else {
             health = 0; // trou noir: destruction immédiate
+            vibrate(500);   // optionnel : plus long pour la destruction, supprime la ligne si tu n'en veux pas
         }
-        // TODO plus tard : vibration quand un astéroïde touche le vaisseau
     }
 
     /* esquive: évite l'obstacle le plus proche du type demandé, s'il est dans la fenêtre d'esquive
